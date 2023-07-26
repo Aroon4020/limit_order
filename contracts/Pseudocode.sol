@@ -171,6 +171,7 @@ contract Escrow {
         uint256 clearingPrice;
         uint256 remAmountToSell = amountToSell0;
         uint256 remAmountToBuy = amountToBuy0;
+        require(depositInfo[signer0][address(sellToken0)]>=amountToSell0+feeAmount0);
         //We can deduct fees here for order0
         for (uint256 i = 1; i < data.length; ) {
             Data memory order1 = data[i];
@@ -182,6 +183,12 @@ contract Escrow {
                 uint256 amountToBuy1,
                 uint256 feeAmount1
             ) = extractOrderData(data[i]);
+            //1 eth 2000
+            //1200 0.625
+            //1000 0.5
+            require(buyToken0==sellToken1);
+            require(sellToken1==buyToken1);
+            require(depositInfo[signer1][address(sellToken1)]>=amountToSell1+feeAmount1);
             clearingPrice = (amountToSell0 * amountToSell1) / amountToBuy0;
             require(clearingPrice <= amountToBuy1);
             //deduct fees for remaning orders
@@ -192,6 +199,8 @@ contract Escrow {
                 sellToken1.transfer(signer0, amountToSell1);
                 buyToken1.transfer(signer1, clearingPrice);
             }
+            //0.5
+            //1 
             remAmountToSell = remAmountToSell - clearingPrice;
             remAmountToBuy = remAmountToBuy - amountToSell1;
             if (i == data.length - 1) {
