@@ -46,7 +46,6 @@ contract Escrow {
         uint32 validTo;
         bool partiallyFillable;
         uint256 feeAmount;
-        bytes signature;
     }
 
     struct unFilledOrder {
@@ -81,36 +80,43 @@ contract Escrow {
 
     //The 'taker' is someone who decides to place an order that is instantly matched with an existing order on the order book. Maker.
     //You become a “maker” when you place an order and it does not trade immediately, so your order stays
+
+    //1 ETH - 2000 USDT
+    //1000 USDT - 1 ETH
+    //500 USDT - 0.25
+
     function settleOrders(
-        Data[] calldata data
+        Data[] calldata data,
+        bytes[] calldata signature
     ) external {
         usersOrderOperations memory userOps;
         userOps.order0 = data[0];
-        userOps.signer0 = verifySigner(userOps.order0, userOps.order0.signature);//not in case of partial
+        userOps.signer0 = verifySigner(userOps.order0, signature[0]);//not in case of partial
         (
             userOps.sellToken0,
             userOps.buyToken0,
             userOps.amountToSell0,
             userOps.amountToBuy0,
             userOps.feeAmount
-        ) = extractOrderData(userOps.order0);
+        ) = extractOrderData(userOps.order0,signature[0]);
         userOps.remAmountToBuy0 = userOps.amountToBuy0;
         userOps.remAmountToSell0 = userOps.amountToSell0;
         require(
             depositInfo[userOps.signer0][address(userOps.sellToken0)] >=
                 userOps.amountToSell0 + userOps.feeAmount
         );
+        //deduct % of amount of trade filled
         userOps.sellToken0.transfer(owner, userOps.feeAmount);
         for (uint256 i = 1; i < data.length; ) {
             userOps.order1 = data[i];
-            userOps.signer1 = verifySigner(userOps.order1, userOps.order1.signature);
+            userOps.signer1 = verifySigner(userOps.order1, signature[i]);
             (
                 userOps.sellToken1,
                 userOps.buyToken1,
                 userOps.amountToSell1,
                 userOps.amountToBuy1,
                 userOps.feeAmount    
-            ) = extractOrderData(data[i]);
+            ) = extractOrderData(data[i],signature[i]);
             executeTrade(userOps);
             unchecked {
                 ++i;
@@ -119,7 +125,7 @@ contract Escrow {
         checkAndUpdatePartialOrder(userOps);
     }
 
-    function executeTrade(usersOrderOperations memory userOps) internal{
+    function executeTrade(usersOrderOperations memory userOps) internal {
             require(userOps.buyToken0 == userOps.sellToken1);
             require(userOps.sellToken0 == userOps.buyToken1);
             require(
@@ -135,8 +141,7 @@ contract Escrow {
             require(userOps.clearingPrice <= userOps.amountToBuy1);
         
         if (userOps.clearingPrice > userOps.remAmountToSell0) {
-                //last partially filled
-                //0.5>1,0.125>0.5
+
                 userOps.sellToken1.transfer(
                     userOps.order0.receiver,
                     userOps.remAmountToBuy0
@@ -238,13 +243,11 @@ contract Escrow {
             appData: APP_DATA,
             feeAmount: 0,
             kind: GPv2Order.KIND_SELL,
-            partiallyFillable: true,
+            partiallyFillable: false,
             sellTokenBalance: GPv2Order.BALANCE_ERC20,
             buyTokenBalance: GPv2Order.BALANCE_ERC20
         });
-
         bytes32 orderHash = order.hash(domainSeparator);
-        //require(unFilledOrderHash[orderHash] == false);
         unFilledOrderHash[orderHash] = true;
         unFilledOrderInfo[signature] = data;
     }
@@ -287,7 +290,8 @@ contract Escrow {
     }
 
     function extractOrderData(
-        Data memory order
+        Data memory order,
+        bytes memory signature
     )
         internal
         view
@@ -299,7 +303,7 @@ contract Escrow {
             uint256 fee
         )
     {   
-        unFilledOrder memory unfilled = unFilledOrderInfo[order.signature];
+        unFilledOrder memory unfilled = unFilledOrderInfo[signature];
         if(unfilled.amountToBuy==0){
             sellToken = order.sellToken;
             buyToken = order.buyToken;
@@ -372,10 +376,61 @@ contract Escrow {
 
     function isValidSignature(
         bytes32 hash,
-        bytes calldata
+        bytes calldata signature
     ) external returns (bytes4 magicValue) {
         require(unFilledOrderHash[hash], "invalid order");
+        delete unFilledOrderInfo[signature];
         delete unFilledOrderHash[hash];
         magicValue = ERC1271_MAGIC_VALUE;
+    }
+
+
+    function cancelOrder(bytes calldata signature,Data calldata data) external {
+        require(verifySigner(data, signature) == msg.sender);
+        unFilledOrder memory unfilled  = unFilledOrderInfo[signature];
+        bytes32 orderHash;
+        if(unfilled.amountToSell > 0){
+            GPv2Order.Data memory order = GPv2Order.Data({
+            sellToken: unfilled.sellToken,
+            buyToken: unfilled.buyToken,
+            receiver: data.receiver,
+            sellAmount: unfilled.amountToSell,
+            buyAmount: unfilled.amountToBuy,
+            validTo: data.validTo,
+            appData: APP_DATA,
+            feeAmount: 0,
+            kind: GPv2Order.KIND_SELL,
+            partiallyFillable: data.partiallyFillable,
+            sellTokenBalance: GPv2Order.BALANCE_ERC20,
+            buyTokenBalance: GPv2Order.BALANCE_ERC20
+            });    
+            orderHash = order.hash(domainSeparator);    
+        }
+
+        else{
+            GPv2Order.Data memory order = GPv2Order.Data({
+            sellToken: unfilled.sellToken,
+            buyToken: unfilled.buyToken,
+            receiver: data.receiver,
+            sellAmount: data.sellAmount,
+            buyAmount: data.buyAmount,
+            validTo: data.validTo,
+            appData: APP_DATA,
+            feeAmount: 0,
+            kind: GPv2Order.KIND_SELL,
+            partiallyFillable: data.partiallyFillable,
+            sellTokenBalance: GPv2Order.BALANCE_ERC20,
+            buyTokenBalance: GPv2Order.BALANCE_ERC20
+        });    
+            orderHash = order.hash(domainSeparator);
+        }
+        
+        require(unFilledOrderHash[orderHash]);
+        delete unFilledOrderHash[orderHash];
+        delete unFilledOrderInfo[signature];
+    }
+
+    function withdraw() external {
+        
     }
 }
