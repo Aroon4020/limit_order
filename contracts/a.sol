@@ -16,20 +16,21 @@ contract Escrow {
     address WETH;
 
     struct usersOrderOperations {
-        // IERC20 sellToken0;
-        // IERC20 buyToken0;
-        // uint256 amountToSell0;
-        // uint256 amountToBuy0;
+        
+        // IERC20 sellToken;
+        // IERC20 buyToken;
+        // uint256 sellAmount0;
+        // uint256 buyAmount0;
         // IERC20 sellToken1;
         // IERC20 buyToken1;
-        // uint256 amountToSell1;
-        // uint256 amountToBuy1;
-        // uint256 clearingPrice;
-        uint256 remAmountToSell0;
-        uint256 remAmountToBuy0;
-        uint256 remAmountToSell1;
-        uint256 remAmountToBuy1;
-        //uint256 feeAmount;
+        //uint256 sellAmount1;
+        //uint256 amountToBuy1;
+        uint256 clearingPrice;
+        // uint256 remAmountToSell0;
+        // uint256 remAmountToBuy0;
+        // uint256 remAmountToSell1;
+        // uint256 remAmountToBuy1;
+        // uint256 feeAmount;
         Data order0;
         bytes signature0;
         address signer0;
@@ -89,146 +90,174 @@ contract Escrow {
         Data[] calldata data,
         bytes[] calldata signature
     ) external {
-        usersOrderOperations memory userOps;
-        userOps.order0 = data[0];
-        userOps.signer0 = verifySigner(userOps.order0, signature[0]);//not in case of partial
+        //usersOrderOperations memory userOps;
+        uint256 i;
+        address signer0;
+        address signer1;
+        uint256 clearingPrice;
+        Data memory order0 = data[0];
+        Data memory order1;
+        signer0 = verifySigner(order0, signature[0]);//not in case of partial
         (
-            userOps.order0.sellToken0,
-            userOps.buyToken0,
-            userOps.amountToSell0,
-            userOps.amountToBuy0,
-            userOps.order0.feeAmount
-        ) = extractOrderData(userOps.order0,signature[0]);
-        userOps.remAmountToBuy0 = userOps.amountToBuy0;
-        userOps.remAmountToSell0 = userOps.amountToSell0;
+            order0.sellToken,
+            order0.buyToken,
+            order0.sellAmount,
+            order0.buyAmount,
+            order0.feeAmount
+        ) = extractOrderData(order0,signature[0]);
+        // userOps.remAmountToBuy0 = userOps.amountToBuy0;
+        // userOps.remAmountToSell0 = userOps.amountToSell0;
         require(
-            depositInfo[userOps.signer0][address(userOps.sellToken0)] >=
-                userOps.amountToSell0 + userOps.feeAmount
+            depositInfo[signer0][address(order0.sellToken)] >=
+                order0.sellAmount + order0.feeAmount
         );
         //deduct % of amount of trade filled
-        userOps.order0.sellToken.transfer(owner, userOps.feeAmount);
-        for (uint256 i = 1; i < data.length; ) {
-            userOps.order1 = data[i];
-            userOps.signer1 = verifySigner(userOps.order1, signature[i]);
+        order0.sellToken.transfer(owner, order0.feeAmount);
+        for (i = 1; i < data.length; ) {
+            order1 = data[i];
+            signer1 = verifySigner(order1, signature[i]);
             (
-                userOps.sellToken1,
-                userOps.buyToken1,
-                userOps.amountToSell1,
-                userOps.amountToBuy1,
-                userOps.feeAmount    
+                order1.sellToken,
+                order1.buyToken,
+                order1.sellAmount,
+                order1.buyAmount,
+                order1.feeAmount    
             ) = extractOrderData(data[i],signature[i]);
-            executeTrade(userOps);
+            clearingPrice =
+                (order0.sellAmount * order1.sellAmount) /
+                order0.buyAmount; //0.5
+            require(clearingPrice <= order1.buyAmount);
+        
+        if (clearingPrice > order0.sellAmount) {
+                order1.sellToken.transfer(
+                    order0.receiver,
+                    order0.buyAmount
+                ); //750
+                order1.buyToken.transfer(
+                    order1.receiver,
+                    order0.sellAmount
+                ); //0.375
+                depositInfo[signer1][address(order1.sellToken)] -=order0.buyAmount;
+                depositInfo[signer0][address(order0.sellToken)] -=order0.sellAmount;
+                order1.sellAmount = order1.sellAmount - order0.buyAmount; //1000-750 250
+                order1.buyAmount = order1.buyAmount - order0.sellAmount; //0.5-0.375
+                order0.sellAmount = 0; //
+                order0.buyAmount = 0;
+            } else {
+                require(clearingPrice >= order0.buyAmount); // not need I think!
+                order1.sellToken.transfer(
+                    order0.receiver,
+                    order1.sellAmount
+                ); //1000,250
+                order1.buyToken.transfer(
+                    order1.receiver,
+                    clearingPrice
+                ); //0.5, 0.125
+                depositInfo[signer1][address(order0.sellToken)] -=order1.sellAmount;
+                depositInfo[signer0][address(order0.sellToken)] -=clearingPrice;
+                order0.sellAmount = order0.sellAmount - clearingPrice; //1-0.5 = 0.5, 0.5-0.125 = 0.375
+                order0.buyAmount =order0.buyAmount - order1.sellAmount; //2000-1000, 1000-250 = 750
+                order1.sellAmount = 0;
+                order1.buyAmount = 0;
+                
+            }
             unchecked {
                 ++i;
             }
         }
-        checkAndUpdatePartialOrder(userOps);
-    }
-
-    function executeTrade(usersOrderOperations memory userOps) internal {
-            require(userOps.buyToken0 == userOps.sellToken1);
-            require(userOps.sellToken0 == userOps.buyToken1);
-            require(
-                depositInfo[userOps.signer1][address(userOps.sellToken1)] >=
-                    userOps.amountToSell1 + userOps.feeAmount
-            );
-            userOps.remAmountToSell1 = userOps.amountToSell1; //1000,250
-            userOps.remAmountToBuy1 = userOps.amountToBuy1; //0.5,0.125
-            userOps.sellToken1.transfer(owner, userOps.feeAmount);
-            userOps.clearingPrice =
-                (userOps.amountToSell0 * userOps.amountToSell1) /
-                userOps.amountToBuy0; //0.5
-            require(userOps.clearingPrice <= userOps.amountToBuy1);
-        
-        if (userOps.clearingPrice > userOps.remAmountToSell0) {
-                if(userOps.order0.receiver==address(this)){
-
-                }
-
-                userOps.sellToken1.transfer(
-                    userOps.order0.receiver,
-                    userOps.remAmountToBuy0
-                ); //750
-                userOps.buyToken1.transfer(
-                    userOps.order1.receiver,
-                    userOps.remAmountToSell0
-                ); //0.375
-                depositInfo[userOps.signer1][address(userOps.sellToken1)] =
-                    depositInfo[userOps.signer1][address(userOps.sellToken1)] -
-                    userOps.remAmountToBuy0;
-                depositInfo[userOps.signer0][address(userOps.sellToken0)] =
-                    depositInfo[userOps.signer0][address(userOps.sellToken0)] -
-                    userOps.remAmountToSell0;
-                userOps.remAmountToSell1 =
-                    userOps.remAmountToSell1 -
-                    userOps.remAmountToBuy0; //1000-750 250
-                userOps.remAmountToBuy1 =
-                    userOps.remAmountToBuy1 -
-                    userOps.remAmountToSell0; //0.5-0.375
-                userOps.remAmountToSell0 = 0; //
-                userOps.remAmountToBuy0 = 0;
-            } else {
-                require(userOps.clearingPrice >= userOps.amountToBuy1); // not need I think!
-                userOps.sellToken1.transfer(
-                    userOps.order0.receiver,
-                    userOps.amountToSell1
-                ); //1000,250
-                userOps.buyToken1.transfer(
-                    userOps.order1.receiver,
-                    userOps.clearingPrice
-                ); //0.5, 0.125
-                depositInfo[userOps.signer1][address(userOps.sellToken1)] =
-                    depositInfo[userOps.signer1][address(userOps.sellToken1)] -
-                    userOps.amountToSell1;
-                depositInfo[userOps.signer0][address(userOps.sellToken0)] =
-                    depositInfo[userOps.signer0][address(userOps.sellToken0)] -
-                    userOps.clearingPrice;
-                userOps.remAmountToSell1 = 0;
-                userOps.remAmountToBuy1 = 0;
-                userOps.remAmountToSell0 =
-                    userOps.remAmountToSell0 -
-                    userOps.clearingPrice; //1-0.5 = 0.5, 0.5-0.125 = 0.375
-                userOps.remAmountToBuy0 =
-                    userOps.remAmountToBuy0 -
-                    userOps.amountToSell1; //2000-1000, 1000-250 = 750
-            }
-    }
-
-    function checkAndUpdatePartialOrder(
-        usersOrderOperations memory userOps
-    ) internal {
-        if (userOps.clearingPrice > userOps.remAmountToSell0) {
-            require(userOps.order1.partiallyFillable);
-            unFilledOrder memory unFilled;
-            unFilled.sellToken = userOps.order1.sellToken;
-            unFilled.buyToken = userOps.order1.buyToken;
-            unFilled.amountToSell = userOps.remAmountToSell1;
-            unFilled.amountToBuy = userOps.remAmountToBuy1;
-            getUnfilledHashGPV2(
-                unFilled,
-                userOps.order1.receiver,
-                userOps.order1.validTo,
-                userOps.signature0
-            );
-            //last partillyFilled
-        } else if (
-            userOps.remAmountToSell0 > 0 && userOps.remAmountToBuy0 > 0
-        ) {
-            require(userOps.order0.partiallyFillable);
-            unFilledOrder memory unFilled;
-            unFilled.sellToken = userOps.order0.sellToken;
-            unFilled.buyToken = userOps.order0.buyToken;
-            unFilled.amountToSell = userOps.remAmountToSell0;
-            unFilled.amountToBuy = userOps.remAmountToBuy0;
-            getUnfilledHashGPV2(
-                unFilled,
-                userOps.order0.receiver,
-                userOps.order0.validTo,
-                userOps.signature0
-            );
-            //first is partially filled
+        if(order0.sellAmount>0){
+            checkAndUpdatePartialOrder(order0,signature[0]);    
+        }
+        else if(order1.sellAmount>0){
+            checkAndUpdatePartialOrder(order1,signature[i]);
         }
     }
+
+    // function executeTrade(Data memory order) internal {
+    //         // require(userOps.buyToken0 == userOps.sellToken1);
+    //         // require(userOps.sellToken0 == userOps.buyToken1);
+    //         // require(
+    //         //     depositInfo[userOps.signer1][address(userOps.sellToken1)] >=
+    //         //         userOps.amountToSell1 + userOps.feeAmount
+    //         // );
+    //         // userOps.remAmountToSell1 = userOps.amountToSell1; //1000,250
+    //         // userOps.remAmountToBuy1 = userOps.amountToBuy1; //0.5,0.125
+    //         // userOps.sellToken1.transfer(owner, userOps.feeAmount);
+    //         userOps.clearingPrice =
+    //             (userOps.amountToSell0 * userOps.amountToSell1) /
+    //             userOps.amountToBuy0; //0.5
+    //         require(userOps.clearingPrice <= userOps.amountToBuy1);
+        
+    //     if (userOps.clearingPrice > userOps.remAmountToSell0) {
+
+    //             userOps.sellToken1.transfer(
+    //                 userOps.order0.receiver,
+    //                 userOps.remAmountToBuy0
+    //             ); //750
+    //             userOps.buyToken1.transfer(
+    //                 userOps.order1.receiver,
+    //                 userOps.remAmountToSell0
+    //             ); //0.375
+    //             depositInfo[userOps.signer1][address(userOps.sellToken1)] =
+    //                 depositInfo[userOps.signer1][address(userOps.sellToken1)] -
+    //                 userOps.remAmountToBuy0;
+    //             depositInfo[userOps.signer0][address(userOps.sellToken0)] =
+    //                 depositInfo[userOps.signer0][address(userOps.sellToken0)] -
+    //                 userOps.remAmountToSell0;
+    //             userOps.remAmountToSell1 =
+    //                 userOps.remAmountToSell1 -
+    //                 userOps.remAmountToBuy0; //1000-750 250
+    //             userOps.remAmountToBuy1 =
+    //                 userOps.remAmountToBuy1 -
+    //                 userOps.remAmountToSell0; //0.5-0.375
+    //             userOps.remAmountToSell0 = 0; //
+    //             userOps.remAmountToBuy0 = 0;
+    //         } else {
+    //             require(userOps.clearingPrice >= userOps.amountToBuy1); // not need I think!
+    //             userOps.sellToken1.transfer(
+    //                 userOps.order0.receiver,
+    //                 userOps.amountToSell1
+    //             ); //1000,250
+    //             userOps.buyToken1.transfer(
+    //                 userOps.order1.receiver,
+    //                 userOps.clearingPrice
+    //             ); //0.5, 0.125
+    //             depositInfo[userOps.signer1][address(userOps.sellToken1)] =
+    //                 depositInfo[userOps.signer1][address(userOps.sellToken1)] -
+    //                 userOps.amountToSell1;
+    //             depositInfo[userOps.signer0][address(userOps.sellToken0)] =
+    //                 depositInfo[userOps.signer0][address(userOps.sellToken0)] -
+    //                 userOps.clearingPrice;
+    //             userOps.remAmountToSell1 = 0;
+    //             userOps.remAmountToBuy1 = 0;
+    //             userOps.remAmountToSell0 =
+    //                 userOps.remAmountToSell0 -
+    //                 userOps.clearingPrice; //1-0.5 = 0.5, 0.5-0.125 = 0.375
+    //             userOps.remAmountToBuy0 =
+    //                 userOps.remAmountToBuy0 -
+    //                 userOps.amountToSell1; //2000-1000, 1000-250 = 750
+    //         }
+    // }
+
+    function checkAndUpdatePartialOrder(
+        Data memory order,
+        bytes memory signature
+    ) internal {
+        
+            require(order.partiallyFillable);
+            unFilledOrder memory unFilled;
+            unFilled.sellToken = order.sellToken;
+            unFilled.buyToken = order.buyToken;
+            unFilled.amountToSell = order.sellAmount;
+            unFilled.amountToBuy = order.buyAmount;
+            getUnfilledHashGPV2(
+                unFilled,
+                order.receiver,
+                order.validTo,
+                signature
+            );
+        }
+    
 
     function getUnfilledHashGPV2(
         unFilledOrder memory data,
@@ -289,6 +318,7 @@ contract Escrow {
     function withdrawAsset(address token, uint256 amount) external {
         require(depositInfo[msg.sender][token] >= amount);
         IERC20(token).transfer(msg.sender, amount);
+        //check if user have any pending hash
         //delete unFilledOrderHash[orderHash];
     }
 
@@ -382,55 +412,17 @@ contract Escrow {
         bytes calldata signature
     ) external returns (bytes4 magicValue) {
         require(unFilledOrderHash[hash], "invalid order");
-        delete unFilledOrderInfo[signature];
+        //delete unFilledOrderInfo[signature];
         delete unFilledOrderHash[hash];
         magicValue = ERC1271_MAGIC_VALUE;
     }
 
 
-    function cancelOrder(bytes calldata signature,Data calldata data) external {
+    function cancelOrder(bytes calldata signature,Data calldata data, bytes32 hash) external {
         require(verifySigner(data, signature) == msg.sender);
-        unFilledOrder memory unfilled  = unFilledOrderInfo[signature];
-        bytes32 orderHash;
-        if(unfilled.amountToSell > 0){
-            GPv2Order.Data memory order = GPv2Order.Data({
-            sellToken: unfilled.sellToken,
-            buyToken: unfilled.buyToken,
-            receiver: data.receiver,
-            sellAmount: unfilled.amountToSell,
-            buyAmount: unfilled.amountToBuy,
-            validTo: data.validTo,
-            appData: APP_DATA,
-            feeAmount: 0,
-            kind: GPv2Order.KIND_SELL,
-            partiallyFillable: data.partiallyFillable,
-            sellTokenBalance: GPv2Order.BALANCE_ERC20,
-            buyTokenBalance: GPv2Order.BALANCE_ERC20
-            });    
-            orderHash = order.hash(domainSeparator);    
-        }
-
-        else{
-            GPv2Order.Data memory order = GPv2Order.Data({
-            sellToken: unfilled.sellToken,
-            buyToken: unfilled.buyToken,
-            receiver: data.receiver,
-            sellAmount: data.sellAmount,
-            buyAmount: data.buyAmount,
-            validTo: data.validTo,
-            appData: APP_DATA,
-            feeAmount: 0,
-            kind: GPv2Order.KIND_SELL,
-            partiallyFillable: data.partiallyFillable,
-            sellTokenBalance: GPv2Order.BALANCE_ERC20,
-            buyTokenBalance: GPv2Order.BALANCE_ERC20
-        });    
-            orderHash = order.hash(domainSeparator);
-        }
-        
-        require(unFilledOrderHash[orderHash]);
-        delete unFilledOrderHash[orderHash];
-        delete unFilledOrderInfo[signature];
+        require(unFilledOrderHash[hash]);
+        delete unFilledOrderHash[hash];
+        //delete unFilledOrderInfo[signature];
     }
 
     function withdraw() external {
