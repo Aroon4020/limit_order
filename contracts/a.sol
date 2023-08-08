@@ -84,8 +84,6 @@ contract Escrow {
             order0.buyAmount,
             order0.feeAmount
         ) = extractOrderData(order0,signature[0]);
-        // userOps.remAmountToBuy0 = userOps.amountToBuy0;
-        // userOps.remAmountToSell0 = userOps.amountToSell0;
         require(
             deposits[signer0][order0.sellToken] >=
                 order0.sellAmount + order0.feeAmount
@@ -107,6 +105,7 @@ contract Escrow {
                 order0.buyAmount; //0.5
             //require(clearingPrice <= order1.buyAmount);//ensure order arangments
             require(clearingPrice>=order1.buyAmount,"limit not respected");
+            require(clearingPrice<=order0.sellAmount,"limit not respected");
             order1.sellToken.transfer(
                     order0.receiver,
                     order1.sellAmount
