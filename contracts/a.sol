@@ -8,7 +8,7 @@ import {IWETH} from "./interfaces/IWETH.sol";
 import {GPv2Order} from "./vendored/GPv2Order.sol";
 import {ICoWSwapOnchainOrders} from "./vendored/ICoWSwapOnchainOrders.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "hardhat/console.sol";
@@ -16,8 +16,10 @@ import "hardhat/console.sol";
 contract Escrow {
     using GPv2Order for *;
     using SafeERC20 for IERC20;
-    bytes32 public constant APP_DATA = keccak256("ABC");
-    IERC20 WETH;
+    bytes32 public constant APP_DATA = keccak256("BLOCKAPEX");
+    IERC20 public WETH = IERC20(0xB4FBF271143F4FBf7B91A5ded31805e42b2208d6);
+    ICoWSwapSettlement public immutable settlement = ICoWSwapSettlement(0x9008D19f58AAbD9eD0D60971565AA8510560ab41);
+    bytes32 public immutable domainSeparator;
 
     // Struct to represent order data
     struct Data {
@@ -51,16 +53,10 @@ contract Escrow {
     // Mapping to track whether an order has been executed
     mapping(bytes => bool) public isExecuted;
 
-    ICoWSwapSettlement public immutable settlement;
-    bytes32 public immutable domainSeparator;
+    
 
-    /**
-     * @dev Constructor to initialize the Escrow contract
-     * @param settlement_ The address of the CoWSwapSettlement contract
-     */
-    constructor(ICoWSwapSettlement settlement_) {
-        settlement = settlement_;
-        domainSeparator = settlement_.domainSeparator();
+    constructor() {       
+        domainSeparator = settlement.domainSeparator();
     }
 
     receive() external payable {}
@@ -78,12 +74,6 @@ contract Escrow {
         }
     }
 
-    //The 'taker' is someone who decides to place an order that is instantly matched with an existing order on the order book. Maker.
-    //You become a “maker” when you place an order and it does not trade immediately, so your order stays
-
-    //1 ETH - 2000 USDT
-    //1000 USDT - 1 ETH
-    //500 USDT - 0.25
 
     /**
      * @dev Settle a batch of orders by transferring tokens and updating balances.
@@ -100,7 +90,6 @@ contract Escrow {
         uint256 clearingPrice;
         Data memory order0 = data[0];
         Data memory order1;
-        uint256 totalFee;
         signer0 = verifySigner(order0, signature[0]); //not in case of partial
         (
             order0.sellToken,
@@ -110,9 +99,9 @@ contract Escrow {
             order0.feeAmount
         ) = extractOrderData(order0, signature[0]);
         require(order0.sellAmount>=data[1].buyAmount,"ordering not respected");
-        if (order0.feeAmount > 0) {
-            totalFee += order0.feeAmount;
-        }
+        // if (order0.feeAmount > 0) {
+        //     totalFee += order0.feeAmount;
+        // }
 
         //deduct % of amount of trade filled
 
@@ -126,40 +115,48 @@ contract Escrow {
                 order1.buyAmount,
                 order1.feeAmount
             ) = extractOrderData(data[i], signature[i]);
-            if (order1.feeAmount > 0) {
-                totalFee += order1.feeAmount;
-            }
+            // if (order1.feeAmount > 0) {
+            //     totalFee += order1.feeAmount;
+            // }
             clearingPrice =
                 (order0.sellAmount * order1.sellAmount) /
                 order0.buyAmount; //0.5
             require(clearingPrice >= order1.buyAmount, "limit not respected");
             //require(clearingPrice <= order0.sellAmount, "limit not respected");
             require(order0.sellToken==order1.buyToken && order0.buyToken==order1.sellToken,"mismatch tokens");
-            order1.sellToken.safeTransfer(order0.receiver, order1.sellAmount); //750
-            order1.buyToken.safeTransfer(order1.receiver, clearingPrice);
+            // order1.sellToken.safeTransfer(order0.receiver, order1.sellAmount); //750
+            // order1.buyToken.safeTransfer(order1.receiver, clearingPrice);
 
             if (clearingPrice > order0.sellAmount) {
                 clearingPrice =
                 (order1.sellAmount * order0.sellAmount) /
                 order1.buyAmount; //0.5
+                _transferAndUpdateDeposit(signer1,order1.sellToken,clearingPrice,order0.receiver,order1.feeAmount);
+                _transferAndUpdateDeposit(signer0,order0.sellToken,order0.sellAmount,order1.receiver,order0.feeAmount);
+                // order1.sellToken.safeTransfer(order0.receiver, clearingPrice); //750
+                // order1.buyToken.safeTransfer(order1.receiver, order0.sellAmount);
                 
-                order0.feeAmount > 0
-                    ? deposits[signer0][order0.sellToken] -=
-                        order0.sellAmount +
-                        order0.feeAmount
-                    : deposits[signer0][order0.sellToken] -= order0.sellAmount;
-                order1.feeAmount > 0
-                    ? deposits[signer1][order1.sellToken] -=
-                        order0.buyAmount +
-                        order1.feeAmount
-                    : deposits[signer1][order1.sellToken] -= order0.buyAmount;
-                deposits[signer0][order0.sellToken] -= order0.sellAmount;
-                order1.sellAmount -= order0.buyAmount; //1000-750 250 //last partially filled
+                // order0.feeAmount > 0
+                //     ? deposits[signer0][order0.sellToken] -=
+                //         order0.sellAmount +
+                //         order0.feeAmount
+                //     : deposits[signer0][order0.sellToken] -= order0.sellAmount;
+                // order1.feeAmount > 0
+                //     ? deposits[signer1][order1.sellToken] -=
+                //         order0.buyAmount +
+                //         order1.feeAmount
+                //     : deposits[signer1][order1.sellToken] -= order0.buyAmount;
+                // deposits[signer0][order0.sellToken] -= order0.sellAmount;
+                order1.sellAmount -= clearingPrice; //1000-750 250 //last partially filled
                 order1.buyAmount -= order0.sellAmount; //0.5-0.375
-                // order0.sellAmount = 0; //
-                // order0.buyAmount = 0;
+                order0.sellAmount = 0; //
+                order0.buyAmount = 0;
                 delete unfilledOrderInfo[signature[0]];
             } else {
+                _transferAndUpdateDeposit(signer1,order1.sellToken,order1.sellAmount,order0.receiver,order1.feeAmount);
+                _transferAndUpdateDeposit(signer0,order0.sellToken,clearingPrice,order1.receiver,order0.feeAmount);
+                // order1.sellToken.safeTransfer(order0.receiver, order1.sellAmount); //750
+                // order1.buyToken.safeTransfer(order1.receiver, clearingPrice);
 
                 // order1.feeAmount > 0
                 //     ? deposits[signer1][order0.sellToken] -=
@@ -173,8 +170,8 @@ contract Escrow {
                 //     : deposits[signer0][order0.sellToken] -= clearingPrice;
                 order0.sellAmount -= clearingPrice; //1-0.5 = 0.5, 0.5-0.125 = 0.375
                 order0.buyAmount -= order1.sellAmount; //2000-1000, 1000-250 = 750
-                // order1.sellAmount = 0;
-                // order1.buyAmount = 0;
+                order1.sellAmount = 0;
+                order1.buyAmount = 0;
                 delete unfilledOrderInfo[signature[i]];
             }
             unchecked {
@@ -187,6 +184,19 @@ contract Escrow {
             checkAndUpdatePartialOrder(order1, signature[i], signer1);
         }
     }
+
+    function _transferAndUpdateDeposit(address signer, IERC20 token, uint256 amount, address receiver, uint256 fee) internal{
+        token.safeTransfer(receiver,amount);
+        if(fee==0){
+            deposits[signer][token]-=amount;
+        }
+        else{
+            deposits[signer][token]-=amount+fee;
+            deposits[owner][token]+=fee;
+        }
+    }
+
+    
 
     function checkAndUpdatePartialOrder(
         Data memory order,
@@ -280,7 +290,7 @@ contract Escrow {
         )
     {
         require(order.validTo >= block.timestamp, "order expired");
-        require(order.receiver != address(this));
+        require(order.receiver != address(this),"invalid receiver");
         unfilledOrder memory unfilled = unfilledOrderInfo[signature];
         if (unfilled.sellAmount == 0) {
             require(!isExecuted[signature], "order already executed");
@@ -307,6 +317,8 @@ contract Escrow {
             _token.safeTransferFrom(msg.sender, address(this), _amount);
         }
     }
+
+
 
     // Function to hash the struct data
     function hashData(Data memory data) internal pure returns (bytes32) {
