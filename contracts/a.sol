@@ -12,9 +12,10 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/math/SafeMath.sol";
+import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import "hardhat/console.sol";
 
-contract Escrow is ReentrancyGuard{
+contract Escrow is EIP712, ReentrancyGuard {
     using GPv2Order for *;
     using SafeERC20 for IERC20;
     using SafeMath for uint256;
@@ -22,22 +23,25 @@ contract Escrow is ReentrancyGuard{
     IERC20 public WETH = IERC20(0xB4FBF271143F4FBf7B91A5ded31805e42b2208d6);
     ICoWSwapSettlement public immutable settlement =
         ICoWSwapSettlement(0x9008D19f58AAbD9eD0D60971565AA8510560ab41);
-    bytes32 public immutable domainSeparator;
-    address public owner = 0xDbfA076EDBFD4b37a86D1d7Ec552e3926021fB97;
-    /// @dev The length of any signature from an externally owned account.
-    uint256 private constant ECDSA_SIGNATURE_LENGTH = 65;
+    bytes32 public immutable GPV2DomainSeparator;
+    
+    // bytes32 public immutable DOMAIN_SEPARATOR;
+    address public owner;
+
+
+    bytes32 private constant TYPED_DATA_HASH =
+        0xca27b2bd45c1b48e3310724bf5c645b69f94e8b61b032dbe4323c2d0c23e25c7;
     // Struct to represent order data
     struct Data {
         IERC20 sellToken;
-        IERC20 buyToken;
-        address receiver;
+        IERC20 buyToken; 
+        address receiver;   
         uint256 sellAmount;
         uint256 buyAmount;
         uint32 validTo;
         bool partiallyFillable;
-        uint256 feeAmount;
+        uint256 feeAmount; 
     }
-
     // Struct to represent unfilled order data
     struct unfilledOrder {
         address owner;
@@ -56,8 +60,29 @@ contract Escrow is ReentrancyGuard{
     // Mapping to track whether an order has been executed
     mapping(bytes => bool) public isExecuted;
 
-    constructor() {
-        domainSeparator = settlement.domainSeparator();
+    // bytes32 public constant abc = keccak256(
+    //      "Order("
+    //          "address sellToken," +
+    //          "address buyToken," +
+    //          "address receiver," +
+    //          "uint256 sellAmount," +
+    //          "uint256 buyAmount," +
+    //          "uint32 validTo," +
+    //          "bytes32 appData," +
+    //          "uint256 feeAmount," +
+    //          "string kind," +
+    //          "bool partiallyFillable" +
+    //          "string sellTokenBalance" +
+    //          "string buyTokenBalance" +
+    //      ")"
+    //     );
+    constructor(
+        string memory name,
+        string memory version,
+        address _owner 
+    ) EIP712(name, version) {
+        GPV2DomainSeparator = settlement.domainSeparator();
+        owner = _owner;
     }
 
     receive() external payable {}
@@ -73,7 +98,7 @@ contract Escrow is ReentrancyGuard{
         if (token.allowance(address(this), settlement.vaultRelayer()) == 0) {
             token.safeApprove(settlement.vaultRelayer(), type(uint256).max);
         }
-    }
+    } 
 
     /**
      * @dev Settle a batch of orders by transferring tokens and updating balances.
@@ -82,15 +107,15 @@ contract Escrow is ReentrancyGuard{
      */
     function settleOrders(
         Data[] calldata data,
-        bytes[] calldata signature
-    ) external nonReentrant{
+        bytes[] calldata signature 
+    ) external nonReentrant {
         uint256 i;
         address signer0;
         address signer1;
         uint256 clearingPrice;
         Data memory order0 = data[0];
         Data memory order1;
-        signer0 = verifySigner(order0, signature[0]); //not in case of partial
+        signer0 = getSigner(order0, signature[0]); //not in case of partial
         (
             order0.sellToken,
             order0.buyToken,
@@ -104,7 +129,7 @@ contract Escrow is ReentrancyGuard{
         );
         for (i = 1; i < data.length; ) {
             order1 = data[i];
-            signer1 = verifySigner(order1, signature[i]);
+            signer1 = getSigner(order1, signature[i]);
             (
                 order1.sellToken,
                 order1.buyToken,
@@ -170,13 +195,117 @@ contract Escrow is ReentrancyGuard{
             }
         }
         if (order0.sellAmount > 0) {
-            checkAndUpdatePartialOrder(order0, signature[0], signer0);
+            _checkAndUpdatePartialOrder(order0, signature[0], signer0);
         } else if (order1.sellAmount > 0) {
-            checkAndUpdatePartialOrder(order1, signature[i], signer1);
+            _checkAndUpdatePartialOrder(order1, signature[i], signer1);
         }
     }
 
-    //function _copyOrderToMemory(Data order)
+    function getHashGPV2(Data memory data, bytes calldata signature) external {
+        require(isExecuted[signature], "Executed Order");
+        require(
+            deposits[getSigner(data, signature)][data.sellToken] >=
+                data.sellAmount + data.feeAmount
+        );
+        require(data.validTo >= block.timestamp, "order expired");
+        deposits[owner][data.sellToken] += data.feeAmount;
+        GPv2Order.Data memory order = GPv2Order.Data({
+            sellToken: data.sellToken,
+            buyToken: data.buyToken,
+            receiver: data.receiver,
+            sellAmount: data.sellAmount,
+            buyAmount: data.buyAmount,
+            validTo: data.validTo,
+            appData: APP_DATA,
+            feeAmount: 0,
+            kind: GPv2Order.KIND_SELL,
+            partiallyFillable: false,
+            sellTokenBalance: GPv2Order.BALANCE_ERC20,
+            buyTokenBalance: GPv2Order.BALANCE_ERC20
+        });
+        //bytes32 orderHash = order.hash(GPV2DomainSeparator);
+        unfilledOrderHash[order.hash(GPV2DomainSeparator)] = true;
+        isExecuted[signature] = true;
+    }
+
+    function withdrawAsset(IERC20 token, uint256 amount) external nonReentrant {
+        require(
+            deposits[msg.sender][token] >= amount,
+            "deposit amount lt withdraw Amount"
+        );
+        IERC20(token).safeTransfer(msg.sender, amount);
+        deposits[msg.sender][token] -= amount;
+    }
+
+    function isValidSignature(
+        bytes32 hash,
+        bytes calldata signature
+    ) external returns (bytes4 magicValue) {
+        require(msg.sender == address(settlement), "only GPV2");
+        require(unfilledOrderHash[hash], "invalid order");
+        unfilledOrder memory order = unfilledOrderInfo[signature];
+        deposits[order.owner][order.sellToken] -= order.sellAmount;
+        delete unfilledOrderInfo[signature];
+        delete unfilledOrderHash[hash];
+        magicValue = ERC1271_MAGIC_VALUE;
+    }
+
+    function cancelOrder(
+        bytes calldata signature,
+        Data calldata data
+    ) external {
+        require(getSigner(data, signature) == msg.sender, "invalid caller");
+        bytes32 hash = getUnfilledHashGPV2(
+            unfilledOrderInfo[signature],
+            data.receiver,
+            data.validTo
+        );
+        delete unfilledOrderHash[hash];
+        delete unfilledOrderInfo[signature];
+    }
+
+    function withdraw(IERC20 token, uint256 amount) external {
+        require(
+            deposits[msg.sender][token] >= amount,
+            "deposit amount lt asked amount"
+        );
+        deposits[msg.sender][token] -= amount;
+        token.safeTransfer(msg.sender, amount);
+    }
+
+    function getSigner(
+        Data memory data,
+        bytes memory signature
+    ) public view returns (address) {
+        return _verify(data, signature);
+    }
+
+    function _verify(
+        Data memory data,
+        bytes memory signature
+    ) internal view returns (address) {
+        bytes32 digest = _hashTypedData(data);
+        return ECDSA.recover(digest, signature);
+    }
+
+    function _hashTypedData(Data memory data) internal view returns (bytes32) {
+        return
+            _hashTypedDataV4(
+                keccak256(
+                    abi.encode(
+                        TYPED_DATA_HASH, // keccak hash of typed data
+                        data.sellToken,
+                        data.buyToken,
+                        data.receiver,
+                        data.sellAmount,
+                        data.buyAmount,
+                        data.validTo,
+                        data.partiallyFillable,
+                        data.feeAmount //uint value
+                    )
+                )
+            );
+    }
 
     function _transferAndUpdateDeposit(
         address signer,
@@ -194,7 +323,7 @@ contract Escrow is ReentrancyGuard{
         }
     }
 
-    function checkAndUpdatePartialOrder(
+    function _checkAndUpdatePartialOrder(
         Data memory order,
         bytes memory signature,
         address signer
@@ -234,43 +363,7 @@ contract Escrow is ReentrancyGuard{
             sellTokenBalance: GPv2Order.BALANCE_ERC20,
             buyTokenBalance: GPv2Order.BALANCE_ERC20
         });
-        orderHash = order.hash(domainSeparator);
-    }
-
-    function getHashGPV2(Data memory data, bytes calldata signature) public {
-        require(isExecuted[signature], "Executed Order");
-        require(
-            deposits[verifySigner(data, signature)][data.sellToken] >=
-                data.sellAmount + data.feeAmount
-        );
-        require(data.validTo >= block.timestamp, "order expired");
-        deposits[owner][data.sellToken] += data.feeAmount;
-        GPv2Order.Data memory order = GPv2Order.Data({
-            sellToken: data.sellToken,
-            buyToken: data.buyToken,
-            receiver: data.receiver,
-            sellAmount: data.sellAmount,
-            buyAmount: data.buyAmount,
-            validTo: data.validTo,
-            appData: APP_DATA,
-            feeAmount: 0,
-            kind: GPv2Order.KIND_SELL,
-            partiallyFillable: false,
-            sellTokenBalance: GPv2Order.BALANCE_ERC20,
-            buyTokenBalance: GPv2Order.BALANCE_ERC20
-        });
-        //bytes32 orderHash = order.hash(domainSeparator);
-        unfilledOrderHash[order.hash(domainSeparator)] = true;
-        isExecuted[signature] = true;
-    }
-
-    function withdrawAsset(IERC20 token, uint256 amount) external nonReentrant {
-        require(
-            deposits[msg.sender][token] >= amount,
-            "deposit amount lt withdraw Amount"
-        );
-        IERC20(token).safeTransfer(msg.sender, amount);
-        deposits[msg.sender][token] -= amount;
+        orderHash = order.hash(GPV2DomainSeparator);
     }
 
     function extractOrderData(
@@ -316,135 +409,5 @@ contract Escrow is ReentrancyGuard{
         } else {
             _token.safeTransferFrom(msg.sender, address(this), _amount);
         }
-    }
-
-    // Function to hash the struct data
-    function hashData(Data memory data) internal pure returns (bytes32) {
-        return
-            keccak256(
-                abi.encodePacked(
-                    data.sellToken,
-                    data.buyToken,
-                    data.receiver,
-                    data.sellAmount,
-                    data.buyAmount,
-                    data.validTo,
-                    data.partiallyFillable,
-                    data.feeAmount
-                )
-            );
-    }
-
-    function recoverEthsignSigner(
-        bytes32 hash,
-        bytes calldata encodedSignature
-    ) internal pure returns (address signer) {
-        signer = ecdsaRecover(
-            keccak256(
-                abi.encodePacked("\x19Ethereum Signed Message:\n32", hash)
-            ),
-            encodedSignature
-        );
-    }
-
-    // function recoverEip712Signer(
-    //     bytes32 hash,
-    //     bytes calldata encodedSignature
-    // ) internal pure returns (address signer) {
-    //     signer = ecdsaRecover(hash, encodedSignature);
-    // }
-
-    function ecdsaRecover(
-        bytes32 message,
-        bytes calldata encodedSignature
-    ) internal pure returns (address signer) {
-        require(
-            encodedSignature.length == ECDSA_SIGNATURE_LENGTH,
-            "malformed ecdsa signature"
-        );
-
-        bytes32 r;
-        bytes32 s;
-        uint8 v;
-
-        // NOTE: Use assembly to efficiently decode signature data.
-        // solhint-disable-next-line no-inline-assembly
-        assembly {
-            // r = uint256(encodedSignature[0:32])
-            r := calldataload(encodedSignature.offset)
-            // s = uint256(encodedSignature[32:64])
-            s := calldataload(add(encodedSignature.offset, 32))
-            // v = uint8(encodedSignature[64])
-            v := shr(248, calldataload(add(encodedSignature.offset, 64)))
-        }
-
-        signer = ecrecover(message, v, r, s);
-        require(signer != address(0), "invalid ecdsa signature");
-    }
-
-    // // Function to recover the signer from the signature
-    // function recoverSignerFromSignature(
-    //     bytes32 messageHash,
-    //     bytes memory signature
-    // ) internal pure returns (address) {
-    //     require(signature.length == 65, "Invalid signature length");
-    //     bytes32 r;
-    //     bytes32 s;
-    //     uint8 v;
-    //     assembly {
-    //         // First 32 bytes are the signature's r data
-    //         r := mload(add(signature, 32))
-    //         // Next 32 bytes are the signature's s data
-    //         s := mload(add(signature, 64))
-    //         // Final byte is the signature's v data
-    //         v := byte(0, mload(add(signature, 96)))
-    //     }
-    //     return ecrecover(messageHash, v, r, s);
-    // }
-
-    // Function to verify the signer of the Data struct
-    function verifySigner(
-        Data memory data,
-        bytes calldata signature
-    ) public pure returns (address) {
-        //bytes32 messageHash = hashData(data);
-        return recoverEthsignSigner(hashData(data), signature);
-        //return recoverSignerFromSignature(messageHash, signature);
-    }
-
-    function isValidSignature(
-        bytes32 hash,
-        bytes calldata signature
-    ) external returns (bytes4 magicValue) {
-        require(msg.sender == address(settlement), "only GPV2");
-        require(unfilledOrderHash[hash], "invalid order");
-        unfilledOrder memory order = unfilledOrderInfo[signature];
-        deposits[order.owner][order.sellToken] -= order.sellAmount;
-        delete unfilledOrderInfo[signature];
-        delete unfilledOrderHash[hash];
-        magicValue = ERC1271_MAGIC_VALUE;
-    }
-
-    function cancelOrder(
-        bytes calldata signature,
-        Data calldata data
-    ) external {
-        require(verifySigner(data, signature) == msg.sender, "invalid caller");
-        bytes32 hash = getUnfilledHashGPV2(
-            unfilledOrderInfo[signature],
-            data.receiver,
-            data.validTo
-        );
-        delete unfilledOrderHash[hash];
-        delete unfilledOrderInfo[signature];
-    }
-
-    function withdraw(IERC20 token, uint256 amount) public {
-        require(
-            deposits[msg.sender][token] >= amount,
-            "deposit amount lt asked amount"
-        );
-        deposits[msg.sender][token] -= amount;
-        token.safeTransfer(msg.sender, amount);
     }
 }
