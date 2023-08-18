@@ -49,6 +49,7 @@ contract Escrow is EIP712, ReentrancyGuard {
         uint256 sellAmount;
         IERC20 buyToken;
         uint256 buyAmount;
+        bytes32 orderHash;
     }
 
     // Mapping to store user deposits of tokens
@@ -56,7 +57,7 @@ contract Escrow is EIP712, ReentrancyGuard {
     // Mapping to store unfilled order information
     mapping(bytes => unfilledOrder) public unfilledOrderInfo;
     // Mapping to track executed orders
-    mapping(bytes32 => bool) public unfilledOrderHash;
+   // mapping(bytes32 => bool) public unfilledOrderHash;
     // Mapping to track whether an order has been executed
     mapping(bytes => bool) public isExecuted;
 
@@ -224,7 +225,8 @@ contract Escrow is EIP712, ReentrancyGuard {
             buyTokenBalance: GPv2Order.BALANCE_ERC20
         });
         //bytes32 orderHash = order.hash(GPV2DomainSeparator);
-        unfilledOrderHash[order.hash(GPV2DomainSeparator)] = true;
+        //unfilledOrderHash[order.hash(GPV2DomainSeparator)] = true;
+        unfilledOrderInfo[signature].orderHash = order.hash(GPV2DomainSeparator);
         isExecuted[signature] = true;
     }
 
@@ -242,11 +244,10 @@ contract Escrow is EIP712, ReentrancyGuard {
         bytes calldata signature
     ) external returns (bytes4 magicValue) {
         require(msg.sender == address(settlement), "only GPV2");
-        require(unfilledOrderHash[hash], "invalid order");
+        require(unfilledOrderInfo[signature].orderHash==hash, "invalid order");
         unfilledOrder memory order = unfilledOrderInfo[signature];
         deposits[order.owner][order.sellToken] -= order.sellAmount;
         delete unfilledOrderInfo[signature];
-        delete unfilledOrderHash[hash];
         magicValue = ERC1271_MAGIC_VALUE;
     }
 
@@ -254,13 +255,14 @@ contract Escrow is EIP712, ReentrancyGuard {
         bytes calldata signature,
         Data calldata data
     ) external {
+        require(unfilledOrderInfo[signature].buyAmount>0,"order filled");
         require(getSigner(data, signature) == msg.sender, "invalid caller");
-        bytes32 hash = getUnfilledHashGPV2(
-            unfilledOrderInfo[signature],
-            data.receiver,
-            data.validTo
-        );
-        delete unfilledOrderHash[hash];
+        // bytes32 hash = getUnfilledHashGPV2(
+        //     unfilledOrderInfo[signature],
+        //     data.receiver,
+        //     data.validTo
+        // );
+        //delete unfilledOrderHash[hash];
         delete unfilledOrderInfo[signature];
     }
 
@@ -340,7 +342,8 @@ contract Escrow is EIP712, ReentrancyGuard {
             order.receiver,
             order.validTo
         );
-        unfilledOrderHash[hash] = true;
+        unfilled.orderHash = hash;
+        //unfilledOrderHash[hash] = true;
         unfilledOrderInfo[signature] = unfilled;
     }
 
