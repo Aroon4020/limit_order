@@ -567,6 +567,21 @@
   "resolved" "https://registry.npmjs.org/@nomicfoundation/hardhat-toolbox/-/hardhat-toolbox-2.0.0.tgz"
   "version" "2.0.0"
 
+"@nomicfoundation/hardhat-verify@^1.1.1":
+  "integrity" "sha512-9QsTYD7pcZaQFEA3tBb/D/oCStYDiEVDN7Dxeo/4SCyHRSm86APypxxdOMEPlGmXsAvd+p1j/dTODcpxb8aztA=="
+  "resolved" "https://registry.npmjs.org/@nomicfoundation/hardhat-verify/-/hardhat-verify-1.1.1.tgz"
+  "version" "1.1.1"
+  dependencies:
+    "@ethersproject/abi" "^5.1.2"
+    "@ethersproject/address" "^5.0.2"
+    "cbor" "^8.1.0"
+    "chalk" "^2.4.2"
+    "debug" "^4.1.1"
+    "lodash.clonedeep" "^4.5.0"
+    "semver" "^6.3.0"
+    "table" "^6.8.0"
+    "undici" "^5.14.0"
+
 "@nomicfoundation/solidity-analyzer-linux-x64-gnu@0.0.3":
   "integrity" "sha512-uRfVDlxtwT1vIy7MAExWAkRD4r9M79zMG7S09mCrWUn58DbLs7UFl+dZXBX0/8FTGYWHhOT/1Etw1ZpAf5DTrg=="
   "resolved" "https://registry.npmjs.org/@nomicfoundation/solidity-analyzer-linux-x64-gnu/-/solidity-analyzer-linux-x64-gnu-0.0.3.tgz"
@@ -1354,6 +1369,13 @@
   dependencies:
     "bignumber.js" "^9.0.1"
     "nofilter" "^1.0.4"
+
+"cbor@^8.1.0":
+  "integrity" "sha512-DwGjNW9omn6EwP70aXsn7FQJx5kO12tX0bZkaTjzdVFM6/7nhA4t0EENocKGx6D2Bch9PE2KzCUf5SceBdeijg=="
+  "resolved" "https://registry.npmjs.org/cbor/-/cbor-8.1.0.tgz"
+  "version" "8.1.0"
+  dependencies:
+    "nofilter" "^3.1.0"
 
 "chai-as-promised@^7.1.1":
   "integrity" "sha512-azL6xMoi+uxu6z4rhWQ1jbdUhOMhis2PvscD/xjLqNMkv3BPPp2JyyuTHOrf9BOosGpNQ11v6BKv/g57RXbiaA=="
@@ -2995,6 +3017,11 @@
   "resolved" "https://registry.npmjs.org/lodash.camelcase/-/lodash.camelcase-4.3.0.tgz"
   "version" "4.3.0"
 
+"lodash.clonedeep@^4.5.0":
+  "integrity" "sha512-H5ZhCF25riFd9uB5UCkVKo61m3S/xZk1x4wA6yp/L3RFP6Z/eHH1ymQcGLo7J3GMPfm0V/7m1tryHuGVxpqEBQ=="
+  "resolved" "https://registry.npmjs.org/lodash.clonedeep/-/lodash.clonedeep-4.5.0.tgz"
+  "version" "4.5.0"
+
 "lodash.truncate@^4.4.2":
   "integrity" "sha512-jttmRe7bRse52OsWIMDLaXxWqRAmtIUccAQ3garviCqJjafXOfNMO0yMfNpdD6zbGaTU0P5Nz7e7gAT6cKmJRw=="
   "resolved" "https://registry.npmjs.org/lodash.truncate/-/lodash.truncate-4.4.2.tgz"
@@ -3330,6 +3357,11 @@
   "integrity" "sha512-N8lidFp+fCz+TD51+haYdbDGrcBWwuHX40F5+z0qkUjMJ5Tp+rdSuAkMJ9N9eoolDlEVTf6u5icM+cNKkKW2mA=="
   "resolved" "https://registry.npmjs.org/nofilter/-/nofilter-1.0.4.tgz"
   "version" "1.0.4"
+
+"nofilter@^3.1.0":
+  "integrity" "sha512-l2NNj07e9afPnhAhvgVrCD/oy2Ai1yfLpuo3EpiO1jFTsB4sFz6oIfAfSZyQzVpkZQ9xS8ZS5g1jCBgq4Hwo0g=="
+  "resolved" "https://registry.npmjs.org/nofilter/-/nofilter-3.1.0.tgz"
+  "version" "3.1.0"
 
 "nopt@3.x":
   "integrity" "sha512-4GUt3kSEYmk4ITxzB/b9vaIDfUVWN/Ml1Fwl11IlnIG2iaJ9O6WXZ9SrYM9NLI8OCBieN2Y8SWC2oJV0RQ7qYg=="
@@ -4471,10 +4503,10 @@
     "has-symbols" "^1.0.3"
     "which-boxed-primitive" "^1.0.2"
 
-"undici@^5.4.0":
-  "integrity" "sha512-oWjWJHzFet0Ow4YZBkyiJwiK5vWqEYoH7BINzJAJOLedZ++JpAlCbUktW2GQ2DS2FpKmxD/JMtWUUWl1BtghGw=="
-  "resolved" "https://registry.npmjs.org/undici/-/undici-5.11.0.tgz"
-  "version" "5.11.0"
+"undici@^5.14.0", "undici@^5.4.0":
+  "integrity" "sha512-1D7w+fvRsqlQ9GscLBwcAJinqcZGHUKjbOmXdlE/v8BvEGXjeWAax+341q44EuTcHXXnfyKNbKRq4Lg7OzhMmg=="
+  "resolved" "https://registry.npmjs.org/undici/-/undici-5.23.0.tgz"
+  "version" "5.23.0"
   dependencies:
     "busboy" "^1.6.0"
 

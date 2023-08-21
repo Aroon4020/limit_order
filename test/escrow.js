@@ -19,7 +19,7 @@ describe("Escrow Contract", function () {
     DAI = await ERC20Factory.deploy();
     await DAI.deployed();
     const EscrowFactory = await ethers.getContractFactory("Escrow");
-    escrow = await EscrowFactory.deploy("Dafi-Protocol","V1",owner.address);
+    escrow = await EscrowFactory.deploy(owner.address);
     await escrow.deployed();
   });
 
@@ -62,7 +62,7 @@ describe("Escrow Contract", function () {
 
 
 
-  it.only("Should deposit and withdraw tokens", async function () {
+  it("Should deposit and withdraw tokens", async function () {
     const tokenAddress = DAI.address;
     const amountToDeposit = ethers.utils.parseEther("1");
     await DAI.mint(user0.address,amountToDeposit);
@@ -79,7 +79,7 @@ describe("Escrow Contract", function () {
     await escrow.connect(user1).withdraw(WETH, amountToDeposit);
   });
 
-  it.only("Should settle full order", async function (){
+  it("Should settle full order", async function (){
     const tokenAddress = DAI.address;
     const amountToDeposit = ethers.utils.parseEther("1801");
     await DAI.mint(user0.address,amountToDeposit);
@@ -130,7 +130,7 @@ describe("Escrow Contract", function () {
      
   });
 
-  it.only("Should settle order partilly filled", async function (){
+  it("Should settle order partilly filled", async function (){
     const tokenAddress = DAI.address;
     const amountToDeposit = ethers.utils.parseEther("1801");
     await DAI.mint(user0.address,amountToDeposit);
@@ -177,12 +177,204 @@ describe("Escrow Contract", function () {
       partiallyFillable,
       feeAmount,
     };
-    let signature1 = await signOrder(user1,Order1data);  
+    let signature1 = await signOrder(user1,Order1data); 
+    
     await escrow.settleOrders([Order0data,Order1data],[signature0,signature1]);
     await escrow.connect(owner).withdraw(DAI.address,ethers.utils.parseEther("0.01"));
     await escrow.connect(user0).cancelOrder(signature0,Order0data);
     await escrow.connect(user0).withdraw(DAI.address,ethers.utils.parseEther("900"));
   });
 
- 
+  it("Should revert settle order", async function (){
+    const tokenAddress = DAI.address;
+    const amountToDeposit = ethers.utils.parseEther("1801");
+    await DAI.mint(user0.address,amountToDeposit);
+    await DAI.approve(escrow.address, amountToDeposit);
+    await escrow.connect(user0).depositToken(tokenAddress, amountToDeposit,{value:0});
+    await escrow.connect(user1).depositToken(WETH, ethers.utils.parseEther("1.01"),{value:ethers.utils.parseEther("1.01")});
+    let sellToken = DAI.address;
+    let buyToken = WETH;
+    let receiver = user0.address;
+    let sellAmount = ethers.utils.parseEther("1800");
+    let buyAmount = ethers.utils.parseEther("1");
+    let validTo = Math.floor(Date.now() / 1000) + 3600; // Valid for 1 hour
+    let partiallyFillable = false;
+    let feeAmount = ethers.utils.parseEther("0.01");
+
+    let Order0data = {
+      sellToken,
+      buyToken,
+      receiver,
+      sellAmount,
+      buyAmount,
+      validTo,
+      partiallyFillable,
+      feeAmount,
+    };
+
+    let signature0 = await signOrder(user0,Order0data);
+    sellToken = WETH;
+    buyToken = DAI.address;
+    receiver = user1.address;
+    sellAmount = ethers.utils.parseEther("0.5");
+    buyAmount = ethers.utils.parseEther("900");
+    validTo = Math.floor(Date.now() / 1000) + 3600; // Valid for 1 hour
+    partiallyFillable = true;
+    feeAmount = ethers.utils.parseEther("0.01");
+
+    let Order1data = {
+      sellToken,
+      buyToken,
+      receiver,
+      sellAmount,
+      buyAmount,
+      validTo,
+      partiallyFillable,
+      feeAmount,
+    };
+    let signature1 = await signOrder(user1,Order1data);  
+    await expect ( escrow.settleOrders([Order0data,Order1data],[signature0,signature1])).to.be.revertedWith("!partiallyfillable");
+  });
+
+
+  it("should get GPV2 hash for cowswap", async function(){
+    const tokenAddress = DAI.address;
+    const amountToDeposit = ethers.utils.parseEther("1801");
+    await DAI.mint(user0.address,amountToDeposit);
+    await DAI.approve(escrow.address, amountToDeposit);
+    await escrow.connect(user0).depositToken(tokenAddress, amountToDeposit,{value:0});
+    await escrow.connect(user1).depositToken(WETH, ethers.utils.parseEther("1.01"),{value:ethers.utils.parseEther("1.01")});
+    let sellToken = DAI.address;
+    let buyToken = WETH;
+    let receiver = user0.address;
+    let sellAmount = ethers.utils.parseEther("1800");
+    let buyAmount = ethers.utils.parseEther("1");
+    let validTo = Math.floor(Date.now() / 1000) + 3600; // Valid for 1 hour
+    let partiallyFillable = false;
+    let feeAmount = ethers.utils.parseEther("0.01");
+
+    let Orderdata = {
+      sellToken,
+      buyToken,
+      receiver,
+      sellAmount,
+      buyAmount,
+      validTo,
+      partiallyFillable,
+      feeAmount,
+    };
+
+    let signature = await signOrder(user0,Orderdata);
+    await escrow.getHashGPV2(Orderdata,signature);
+  });
+
+  it("Should settle order partilly filled and check mappings and IsValidSig", async function (){
+    const tokenAddress = DAI.address;
+    const amountToDeposit = ethers.utils.parseEther("1801");
+    await DAI.mint(user0.address,amountToDeposit);
+    await DAI.approve(escrow.address, amountToDeposit);
+    await escrow.connect(user0).depositToken(tokenAddress, amountToDeposit,{value:0});
+    await escrow.connect(user1).depositToken(WETH, ethers.utils.parseEther("1.01"),{value:ethers.utils.parseEther("1.01")});
+    let sellToken = DAI.address;
+    let buyToken = WETH;
+    let receiver = user0.address;
+    let sellAmount = ethers.utils.parseEther("1800");
+    let buyAmount = ethers.utils.parseEther("1");
+    let validTo = Math.floor(Date.now() / 1000) + 3600; // Valid for 1 hour
+    let partiallyFillable = true;
+    let feeAmount = ethers.utils.parseEther("0.01");
+
+    let Order0data = {
+      sellToken,
+      buyToken,
+      receiver,
+      sellAmount,
+      buyAmount,
+      validTo,
+      partiallyFillable,
+      feeAmount,
+    };
+
+    let signature0 = await signOrder(user0,Order0data);
+    sellToken = WETH;
+    buyToken = DAI.address;
+    receiver = user1.address;
+    sellAmount = ethers.utils.parseEther("0.5");
+    buyAmount = ethers.utils.parseEther("900");
+    validTo = Math.floor(Date.now() / 1000) + 3600; // Valid for 1 hour
+    partiallyFillable = true;
+    feeAmount = ethers.utils.parseEther("0.01");
+
+    let Order1data = {
+      sellToken,
+      buyToken,
+      receiver,
+      sellAmount,
+      buyAmount,
+      validTo,
+      partiallyFillable,
+      feeAmount,
+    };
+    let signature1 = await signOrder(user1,Order1data); 
+    await escrow.settleOrders([Order0data,Order1data],[signature0,signature1]);
+    let tx0 = await escrow.unfilledOrderInfo(signature0); 
+    await escrow.unfilledOrderInfo(signature1);
+    await escrow.isValidSignature(tx0.orderHash,signature0);
+
+  });
+
+
+  it("Should settle order partilly filled and check mappings and IsValidSig", async function (){
+    const tokenAddress = DAI.address;
+    const amountToDeposit = ethers.utils.parseEther("1801");
+    await DAI.mint(user0.address,amountToDeposit);
+    await DAI.approve(escrow.address, amountToDeposit);
+    await escrow.connect(user0).depositToken(tokenAddress, amountToDeposit,{value:0});
+    await escrow.connect(user1).depositToken(WETH, ethers.utils.parseEther("1.01"),{value:ethers.utils.parseEther("1.01")});
+    let sellToken = DAI.address;
+    let buyToken = WETH;
+    let receiver = user0.address;
+    let sellAmount = ethers.utils.parseEther("1800");
+    let buyAmount = ethers.utils.parseEther("1");
+    let validTo = Math.floor(Date.now() / 1000) + 3600; // Valid for 1 hour
+    let partiallyFillable = true;
+    let feeAmount = ethers.utils.parseEther("0.01");
+
+    let Order0data = {
+      sellToken,
+      buyToken,
+      receiver,
+      sellAmount,
+      buyAmount,
+      validTo,
+      partiallyFillable,
+      feeAmount,
+    };
+
+    let signature0 = await signOrder(user0,Order0data);
+    sellToken = WETH;
+    buyToken = DAI.address;
+    receiver = user1.address;
+    sellAmount = ethers.utils.parseEther("0.5");
+    buyAmount = ethers.utils.parseEther("900");
+    validTo = Math.floor(Date.now() / 1000) + 3600; // Valid for 1 hour
+    partiallyFillable = true;
+    feeAmount = ethers.utils.parseEther("0.01");
+
+    let Order1data = {
+      sellToken,
+      buyToken,
+      receiver,
+      sellAmount,
+      buyAmount,
+      validTo,
+      partiallyFillable,
+      feeAmount,
+    };
+    let signature1 = await signOrder(user1,Order1data); 
+    await escrow.settleOrders([Order0data,Order1data],[signature0,signature1]);
+    let tx0 = await escrow.unfilledOrderInfo(signature0); 
+    await escrow.unfilledOrderInfo(signature1);
+    await escrow.isValidSignature(tx0.orderHash,signature0);
+  });
 });

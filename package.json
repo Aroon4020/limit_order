@@ -9,6 +9,7 @@
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^2.0.0",
+    "@nomicfoundation/hardhat-verify": "^1.1.1",
     "hardhat": "^2.11.1",
     "node-fetch": "^2.6.7"
   },
