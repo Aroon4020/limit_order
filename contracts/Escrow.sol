@@ -15,8 +15,6 @@ import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import "hardhat/console.sol";
 
-//import { ICoWSwapOnchainOrders } from "./vendored/ICoWSwapOnchainOrders.sol";
-
 contract Escrow is EIP712, ReentrancyGuard {
     using GPv2Order for *;
     using SafeERC20 for IERC20;
@@ -221,11 +219,8 @@ contract Escrow is EIP712, ReentrancyGuard {
         bytes32 hash,
         bytes calldata signature
     ) external returns (bytes4 magicValue) {
-        console.logBytes(signature);
         unfilledOrder memory order = unfilledOrderInfo[signature];
-        //require(order.orderHash == hash, "invalid hash");
-        console.logBytes32(hash);
-        console.logBytes32(order.orderHash);
+        require(order.orderHash == hash, "invalid hash");
         deposits[order.owner][order.sellToken] -= order.sellAmount;
         delete unfilledOrderInfo[signature];
         magicValue = ERC1271_MAGIC_VALUE;
