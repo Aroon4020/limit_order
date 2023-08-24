@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.17;
-
-import {ICoWSwapSettlement} from "./interfaces/ICoWSwapSettlement.sol";
-import {ERC1271_MAGIC_VALUE, IERC1271} from "./interfaces/IERC1271.sol";
-
 import {IWETH} from "./interfaces/IWETH.sol";
+import {IEscrow} from "./interfaces/IEscrow.sol";
 import {GPv2Order} from "./vendored/GPv2Order.sol";
 import {ICoWSwapOnchainOrders} from "./vendored/ICoWSwapOnchainOrders.sol";
+import {ICoWSwapSettlement} from "./interfaces/ICoWSwapSettlement.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -15,59 +14,59 @@ import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import "hardhat/console.sol";
 
-contract Escrow is EIP712, ReentrancyGuard {
+contract Escrow is IEscrow, EIP712, ReentrancyGuard, Ownable {
     using GPv2Order for *;
     using SafeERC20 for IERC20;
     using SafeMath for uint256;
+
+    bytes4 constant ERC1271_MAGIC_VALUE = 0x1626ba7e;
     bytes32 public constant APP_DATA = keccak256("APEXER");
     IERC20 public WETH = IERC20(0xB4FBF271143F4FBf7B91A5ded31805e42b2208d6);
     ICoWSwapSettlement public immutable settlement =
         ICoWSwapSettlement(0x9008D19f58AAbD9eD0D60971565AA8510560ab41);
     bytes32 public immutable GPV2DomainSeparator;
-
-    address public owner;
-
     bytes32 private constant TYPED_DATA_HASH =
         0xca27b2bd45c1b48e3310724bf5c645b69f94e8b61b032dbe4323c2d0c23e25c7;
-    // Struct to represent order data
-    struct Data {
-        IERC20 sellToken;
-        IERC20 buyToken;
-        address receiver;
-        uint256 sellAmount;
-        uint256 buyAmount;
-        uint32 validTo;
-        bool partiallyFillable;
-        uint256 feeAmount;
-    }
-    // Struct to represent unfilled order data
-    struct unfilledOrder {
-        address owner; //must
-        IERC20 sellToken; //must
-        uint256 sellAmount; //must
-        IERC20 buyToken;
-        uint256 buyAmount;
-        bytes32 orderHash;
-    }
 
     mapping(address => mapping(IERC20 => uint256)) public deposits;
-    
+
     mapping(bytes => unfilledOrder) public unfilledOrderInfo;
 
     mapping(bytes => bool) public isExecuted;
-    constructor(address _owner) EIP712("Dafi-Protocol", "V1") {
-        owner = _owner;
+
+    mapping(address => bool) public isSolver;
+
+    modifier onlySolver() {
+        require(isSolver[msg.sender], "!solver");
+        _;
+    }
+
+    modifier onlySettlement() {
+        require(msg.sender == address(settlement), "!settlement");
+        _;
+    }
+
+    constructor() EIP712("Dafi-Protocol", "V1") {
         GPV2DomainSeparator = settlement.domainSeparator();
     }
 
     receive() external payable {}
+
+    function updateSolverAddress(address _solver) external override onlyOwner {
+        isSolver[_solver]
+            ? isSolver[_solver] = true
+            : isSolver[_solver] = false;
+    }
 
     /**
      * @dev Deposit ERC20 tokens into the escrow contract.
      * @param token The ERC20 token to deposit.
      * @param amount The amount of tokens to deposit.
      */
-    function depositToken(IERC20 token, uint256 amount) external payable {
+    function depositToken(
+        IERC20 token,
+        uint256 amount
+    ) external payable override {
         _pay(token, amount);
         deposits[msg.sender][token] += amount;
         if (token.allowance(address(this), settlement.vaultRelayer()) == 0) {
@@ -83,7 +82,7 @@ contract Escrow is EIP712, ReentrancyGuard {
     function settleOrders(
         Data[] calldata data,
         bytes[] calldata signature
-    ) external nonReentrant {
+    ) external override nonReentrant onlySolver {
         address signer0;
         address signer1;
         uint256 clearingPrice;
@@ -134,11 +133,12 @@ contract Escrow is EIP712, ReentrancyGuard {
                     order1.receiver,
                     order0.feeAmount
                 );
-                order1.sellAmount -= clearingPrice; 
+                order1.sellAmount -= clearingPrice;
                 order1.buyAmount -= order0.sellAmount;
                 order0.sellAmount = 0; //
                 order0.buyAmount = 0;
-                delete unfilledOrderInfo[signature[0]];
+                if (unfilledOrderInfo[signature[0]].buyAmount > 0)
+                    delete unfilledOrderInfo[signature[0]];
             } else {
                 _transferAndUpdateDeposit(
                     signer1,
@@ -155,11 +155,12 @@ contract Escrow is EIP712, ReentrancyGuard {
                     order1.receiver,
                     order0.feeAmount
                 );
-                order0.sellAmount -= clearingPrice; 
+                order0.sellAmount -= clearingPrice;
                 order0.buyAmount -= order1.sellAmount;
                 order1.sellAmount = 0;
                 order1.buyAmount = 0;
-                delete unfilledOrderInfo[signature[i]];
+                if (unfilledOrderInfo[signature[i]].buyAmount > 0)
+                    delete unfilledOrderInfo[signature[i]];
             }
             unchecked {
                 ++i;
@@ -177,14 +178,22 @@ contract Escrow is EIP712, ReentrancyGuard {
         }
     }
 
-    function getHashGPV2(Data memory data, bytes calldata signature) external {
+    function getHashGPV2(
+        Data memory data,
+        bytes calldata signature
+    ) external override onlySolver {
         require(!isExecuted[signature], "Executed Order");
         require(
             deposits[getSigner(data, signature)][data.sellToken] >=
-                data.sellAmount + data.feeAmount
+                data.sellAmount + data.feeAmount,
+            "not enough deposit"
         );
         require(data.validTo >= block.timestamp, "order expired");
-        deposits[owner][data.sellToken] += data.feeAmount;
+        require(
+            data.receiver != address(this) || data.receiver != address(0),
+            "Invalid recevier"
+        );
+        deposits[owner()][data.sellToken] += data.feeAmount;
         GPv2Order.Data memory order = GPv2Order.Data({
             sellToken: data.sellToken,
             buyToken: data.buyToken,
@@ -199,49 +208,41 @@ contract Escrow is EIP712, ReentrancyGuard {
             sellTokenBalance: GPv2Order.BALANCE_ERC20,
             buyTokenBalance: GPv2Order.BALANCE_ERC20
         });
-
-        unfilledOrderInfo[signature].orderHash = order.hash(
-            GPV2DomainSeparator
-        );
+        unfilledOrder memory unfilled;
+        unfilled.owner = getSigner(data, signature);
+        unfilled.sellToken = order.sellToken;
+        unfilled.buyToken = order.buyToken;
+        unfilled.sellAmount = order.sellAmount;
+        unfilled.buyAmount = order.buyAmount;
+        unfilled.orderHash = order.hash(GPV2DomainSeparator);
+        unfilledOrderInfo[signature] = unfilled;
         isExecuted[signature] = true;
     }
 
-    function withdrawAsset(IERC20 token, uint256 amount) external nonReentrant {
-        require(
-            deposits[msg.sender][token] >= amount,
-            "deposit amount lt withdraw Amount"
-        );
-        IERC20(token).safeTransfer(msg.sender, amount);
-        deposits[msg.sender][token] -= amount;
-    }
-
-    function isValidSignature(
-        bytes32 hash,
-        bytes calldata signature
-    ) external returns (bytes4 magicValue) {
-        unfilledOrder memory order = unfilledOrderInfo[signature];
-        require(order.orderHash == hash, "invalid hash");
-        deposits[order.owner][order.sellToken] -= order.sellAmount;
-        delete unfilledOrderInfo[signature];
-        magicValue = ERC1271_MAGIC_VALUE;
-    }
-
     function cancelOrder(
-        bytes calldata signature,
-        Data calldata data
-    ) external {
+        Data calldata data,
+        bytes calldata signature
+    ) external override {
         require(unfilledOrderInfo[signature].buyAmount > 0, "order filled");
         require(getSigner(data, signature) == msg.sender, "invalid caller");
         delete unfilledOrderInfo[signature];
     }
 
-    function withdraw(IERC20 token, uint256 amount) external {
-        require(
-            deposits[msg.sender][token] >= amount,
-            "deposit amount lt asked amount"
-        );
+    function withdraw(IERC20 token, uint256 amount) external override {
+        require(deposits[msg.sender][token] >= amount, "not enough deposit");
         deposits[msg.sender][token] -= amount;
         token.safeTransfer(msg.sender, amount);
+    }
+
+    function isValidSignature(
+        bytes32 hash,
+        bytes calldata signature
+    ) external override onlySettlement returns (bytes4 magicValue) {
+        unfilledOrder memory order = unfilledOrderInfo[signature];
+        require(order.orderHash == hash, "invalid hash");
+        deposits[order.owner][order.sellToken] -= order.sellAmount;
+        delete unfilledOrderInfo[signature];
+        magicValue = ERC1271_MAGIC_VALUE;
     }
 
     function getSigner(
@@ -290,7 +291,7 @@ contract Escrow is EIP712, ReentrancyGuard {
             deposits[signer][token] -= amount;
         } else {
             deposits[signer][token] -= amount + fee;
-            deposits[owner][token] += fee;
+            deposits[owner()][token] += fee;
         }
     }
 
@@ -306,7 +307,7 @@ contract Escrow is EIP712, ReentrancyGuard {
         unfilled.buyToken = order.buyToken;
         unfilled.sellAmount = order.sellAmount;
         unfilled.buyAmount = order.buyAmount;
-        bytes32 hash = getUnfilledHashGPV2(
+        bytes32 hash = _getUnfilledHashGPV2(
             unfilled,
             order.receiver,
             order.validTo
@@ -315,7 +316,7 @@ contract Escrow is EIP712, ReentrancyGuard {
         unfilledOrderInfo[signature] = unfilled;
     }
 
-    function getUnfilledHashGPV2(
+    function _getUnfilledHashGPV2(
         unfilledOrder memory data,
         address receiver,
         uint32 validTo
@@ -377,7 +378,7 @@ contract Escrow is EIP712, ReentrancyGuard {
             amountToBuy = unfilled.buyAmount;
             signer = unfilled.owner;
             require(
-                deposits[signer][order.sellToken] >= amountToSell + fee,
+                deposits[signer][order.sellToken] >= amountToSell,
                 "not enough deposit"
             );
         }

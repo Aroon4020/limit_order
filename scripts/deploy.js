@@ -1,14 +1,12 @@
 const { ethers } = require("hardhat");
 
-const SETTLEMENT = "0x9008D19f58AAbD9eD0D60971565AA8510560ab41";
-
 async function main() {
-  const GATOrders = await ethers.getContractFactory("Escrow");
-  const orders = await GATOrders.deploy();
+  const ESCROW = await ethers.getContractFactory("Escrow");
+  const escrow = await ESCROW.deploy("0xdbfa076edbfd4b37a86d1d7ec552e3926021fb97");
 
-  await orders.deployed();
+  await escrow.deployed();
 
-  console.log(`GAT orders deployed to ${orders.address}`);
+  console.log(`deployed to ${escrow.address}`);
 }
 
 main().catch((error) => {
